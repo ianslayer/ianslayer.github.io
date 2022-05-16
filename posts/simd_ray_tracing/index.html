@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+
+    <head><title>SSE Ray Tracing on M1 Max &ndash; ian&#39;s corner</title>
+
+
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8"/>
+
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.2/css/all.min.css" integrity="sha512-HK5fgLBL+xu6dm/Ii3z4xhlSUyZgTT9tuc/hSrtw6uzJOvgRr2a9jyxxT1ely+B+xFAmJKVSTbpM/CuL7qxO8w==" crossorigin="anonymous" />
+
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/academicons/1.9.1/css/academicons.min.css" integrity="sha512-b1ASx0WHgVFL5ZQhTgiPWX+68KjS38Jk87jg7pe+qC7q9YkEtFq0z7xCglv7qGIs/68d3mAp+StfC8WKC5SSAg==" crossorigin="anonymous" />
+
+
+<link rel="stylesheet" href="https://ianslayer.github.io/css/colour/gruvbox-dark.css">
+<link rel="stylesheet" href="https://ianslayer.github.io/css/colour/dark-mode.css">
+<link rel="stylesheet" href="https://ianslayer.github.io/css/risotto.css">
+<link rel="stylesheet" href="https://ianslayer.github.io/css/custom.css">
+</head>
+
+    <body>
+        <div class="page">
+
+            <header class="page__header"><h1 class="page__logo"><a href="https://ianslayer.github.io" class="page__logo-inner">ian&#39;s corner</a></h1>
+<nav class="page__nav main-nav">
+    <ul>
+    
+    
+    <li class="main-nav__item"><a class="nav-main-item" href="/about/" title="">About</a></li>
+    
+    <li class="main-nav__item"><a class="nav-main-item active" href="/posts/" title="Posts">Posts</a></li>
+    
+    </ul>
+</nav>
+
+</header>
+
+            <section class="page__body">
+    <header class="content__header">
+        <h1>SSE Ray Tracing on M1 Max</h1>
+    </header>
+    <div class="content__body">
+        <p><br>
+<img src="/posts/simd_ray_tracing/ray_trace.png" alt="ray trace result">
+After I burned out and quit my job. I am currently in self-healing mode. What could be more restorative than some SIMD ray tracing and benchmarking? So I wrote a good old path tracing demo on my shiny new M1 Max MacBook Pro and benchmarked it against my old PC with an Intel 9900k CPU.</p>
+<h1 id="development-environment">Development Environment</h1>
+<p><br>
+Apple silicon Mac could run x86(at least user-mode) code through Rosetta 2. The Rosetta emulation layer works surprisingly well in Xcode. I could single step at the x86 assembly language level in Xcode, with all the x86 registers and stuff, which is like black magic to me.</p>
+<figure display: flex;
+	flex-direction: column;
+	align-items: center;>
+    <img src="/posts/simd_ray_tracing/single_step.png" alt="Black Magic">
+    <figcaption style="align-items: center; display: flex; flex-direction: row; justify-content: space-around;">x86 single step black magic!!</figcaption>
+</figure> 
+<h1 id="the-path-tracer">The Path Tracer</h1>
+<p><br>
+The complete source code with Xcode/MSVC project files could be found on my <a href="https://github.com/ianslayer/ray_tracing">Github</a>.</p>
+<p>The path tracer is very basic, it could only render the famous <a href="http://www.graphics.cornell.edu/online/box/data.html">Cornell Box</a> scene, constructed in code by hand. And the output is a fixed 1280x1280 HDR image.</p>
+<p>It has 3 options:</p>
+<pre><code>--sample_count: sample count per pixel
+--bounce_count: max bounce depth of each path
+--method: scalar or simd
+</code></pre>
+<p>The path tracer doesn&rsquo;t have any acceleration structure, it&rsquo;s just brute force ray tracing against all triangles in the scene.</p>
+<p>The only interesting bit to speed up the program is the old fashion, hand-written SSE vectorized ray-triangle intersection test.</p>
+<h1 id="what-is-sse">What is SSE</h1>
+<p><br>
+SSE is the old x86 <a href="https://en.wikipedia.org/wiki/Single_instruction,_multiple_data">SIMD</a> extension, which has 16 128-bit XMM vector registers. Each register could contain 4 floats or 2 doubles:</p>
+<pre><code>+----+----+----+----+
+| f0 | f1 | f2 | f3 |  An XMM register treated as 4 floats
++----+----+----+----+
+ 32b  32b  32b  32b
+
++---------+---------+
+|    d0   |    d1   |  An XMM register treated as 2 doubles
++---------+---------+
+    64b       64b
+</code></pre>
+<p>There are wider SIMD extensions like AVX or AVX512 on newer Intel CPUs. But on Apple silicon, the native <a href="https://www.arm.com/zh-TW/technologies/neon">NEON</a> SIMD extension is only 4-wide. So I had to use the lowest common denominator. To test the native M1 Max performance, I use the <a href="https://github.com/DLTcollab/sse2neon.git">sse2neon</a> library to translate SSE intrinsics to NEON.</p>
+<h1 id="how-to-vectorize-code">How to Vectorize Code</h1>
+<p><br>
+It&rsquo;s often recommended not to write SIMD code directly but use something like <a href="https://github.com/ispc/ispc/">ISPC</a>. Practicality is not the main concern of the project, though. So I go with the intrinsic approach.</p>
+<p>Intrinsic is like wrapped assembly language, intrinsic operands are C/C++ variables of vector type(__m128 or __m128i). Compilers will deal with register allocation for us.</p>
+<p>For example, to add 2 4-elements float vector using SSE,</p>
+<pre><code>__m128 _mm_add_ps (__m128 a, __m128 b)
+</code></pre>
+<p>translates to</p>
+<pre><code>addps xmm, xmm
+</code></pre>
+<p>Both <a href="https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html">Intel</a> and <a href="https://developer.arm.com/architectures/instruction-sets/intrinsics">ARM</a> intrinsics guide could be found online.</p>
+<p>Vectorizing scalar code is pretty straightforward for trivial(no branching) embarrassingly parallel tasks - vectorized version just performs 4 units of tasks together.</p>
+<p>Take a 3D vector dot product for example:</p>
+<pre><code>struct vec3_t
+{
+    float x, y, z;
+};
+
+float dot(const vec3_t&amp; v0, const vec3_t&amp; v1)
+{
+    float x2 = v0.x * v1.x;
+    float y2 = v0.y * v1.y;
+    float z2 = v0.z * v1.z;
+    return x2 + y2 + z2;
+}    
+</code></pre>
+<p>To vectorize the dot product, just replace each scalar variable with a __m128 vector, and C/C++ operators with equivalent intrinsics:</p>
+<pre><code>struct vec3_soa_t
+{
+    //four 3D vectors:
+    //(x0, y0, z0),
+    //(x1, y1, z1),
+    //(x2, y2, z2),
+    //(x3, y3, z3)
+
+    //stored as follows
+
+    __m128 x; //x0, x1, x2, x3
+    __m128 y; //y0, y1, y2, y3
+    __m128 z; //z0, z1, z2, z3
+};
+
+__m128 dot(const vec3_soa_t&amp; v0, const vec3_soa_t&amp; v1)
+{    
+    __m128 x2 = _mm_mul_ps(v0.x, v1.x); //x * x
+    __m128 y2 = _mm_mul_ps(v0.y, v1.y); //y * y
+    __m128 z2 = _mm_mul_ps(v0.z, v1.z); //z * z
+
+    return _mm_add_ps(_mm_add_ps(x2, y2), z2); //x * x + y * y + z * z
+}
+</code></pre>
+<p>And voilà, we performed 4 dot products at the same time!</p>
+<h1 id="vectorize-triangles-or-rays">Vectorize triangles or rays</h1>
+<p><br>
+There are 2 different approaches when vectorizing the ray-triangle intersection test. The first is one ray against multiple triangles(vectorize triangles), and the other is multiple rays against a single triangle. I choose the first approach because it&rsquo;s more convenient to replace the scalar intersect function call with SIMD one without re-writing the whole outer loop:</p>
+<pre><code>if(method == RT_SCALAR)
+    intersect_info = intersect(ray, scene);
+else
+    intersect_info = intersect_simd(ray, scene);
+</code></pre>
+<h1 id="triangles-simd-data-layout">Triangles SIMD data layout</h1>
+<p><br>
+Note that I named the vectorized version of the 3D vector type vec3_&ldquo;soa&rdquo;_t. SoA stands for <a href="https://en.wikipedia.org/wiki/AoS_and_SoA">&ldquo;structure of arrays&rdquo;</a>, which is the transpose of the ordinary AoS data layout, and each array contains homogeneous data. SIMD performs best in this configuration. For example, in the scalar version, the scene data contains a list of triangles:</p>
+<pre><code>struct triangle_t
+{
+    vec3_t p0, p1, p2;
+};
+
+std::vector&lt;triangle_t&gt; triangle_list;
+</code></pre>
+<p>In the SoA layout, each component(x, y, and z) of each vec3_t is extracted and put into separated __m128 arrays:</p>
+<pre><code>struct triangle_soa_t
+{
+    __m128* p0_x = 0; //one element contains four vector's p0.x
+    __m128* p0_y = 0; //one element contains four vector's p0.y
+    __m128* p0_z = 0; //one element contains four vector's p0.z
+
+    __m128* p1_x = 0;
+    __m128* p1_y = 0;
+    __m128* p1_z = 0;
+
+    __m128* p2_x = 0;
+    __m128* p2_y = 0;
+    __m128* p2_z = 0;
+};
+</code></pre>
+<p>It&rsquo;s cumbersome to write transpose functions and SIMD data accessors in older languages like C or C++. And SIMD vector type usually requires non-trivial memory alignment(16 bytes aligned for __m128) to achieve the best performance, which is also problematic in C/C++. This is the area where newer languages like Zig could help a lot. I am mostly a C/C++ programmer, I really hope C/C++ could be improved in this area(and also introspection, please).</p>
+<h1 id="deal-with-branches">Deal with Branches</h1>
+<p><br>
+Dynamic branches(if-else control blocks) are harder to vectorize because each lane of the SIMD vector could be executed in different code paths. Oftentimes we have to write branchless code, that is, use some kind of masks to isolate active lanes and execute every code path. And in some cases when all lanes are on the same side of a branch, we could use a branch to avoid executing every code path and save some time.</p>
+<p>In ray-triangle intersect test, there are several predicates to early return and reject the test, for example:</p>
+<pre><code>float det = dot(e0, q);
+float epsilon = 1e-5f;   
+if (det &gt; -epsilon &amp;&amp; det &lt; epsilon)
+    return intersect_info;
+</code></pre>
+<p>I use a manually managed mask(a __m128i) variable to track the active state of each lane, the lane is active if all bits of the lane in the mask are all 1s, if bits in the masks are all zero, then all lanes are deactive, then we could early return. Note that a lane is &ldquo;active&rdquo; when the lane fails the test, so we are testing the opposite of the test, that is:</p>
+<pre><code>if (det &lt;= -epsilon || det &gt;= epsilon)
+{
+    ...//active, to following test
+} else {
+    return intersect_info; //early return
+}
+</code></pre>
+<p>which translate to the SIMD code:</p>
+<pre><code>// all lanes are active initially
+__m128i mask = _mm_set_epi32(-1, -1, -1, -1); 
+
+__m128 c_epsilon = _mm_set_ps1(1e-5f);
+__m128 c_m_epsilon = _mm_set_ps1(-1e-5f);   
+
+// test det &lt;= -epsilon
+__m128i det_gt_epsilon = _mm_castps_si128(_mm_cmple_ps(det, c_m_epsilon));
+
+// test det &gt;= epsilon
+__m128i det_lt_epsilon = _mm_castps_si128(_mm_cmpge_ps(det, c_epsilon)); 
+
+// det &lt;= -epsilon || det &gt;= epsilon
+__m128i test_det = _mm_or_si128(det_gt_epsilon, det_lt_epsilon); 
+
+mask = _mm_and_si128(mask, test_det);
+
+int mask_all_zero = _mm_test_all_zeros(mask, mask);
+
+if(mask_all_zero) {
+    return intersect_info;
+}
+</code></pre>
+<h1 id="benchmark-result">Benchmark result</h1>
+<p><br>
+There are already a lot of glowing reviews of the M1 family CPUs, but I am still pleased to see the performance in person. A laptop CPU that outperformed a no-so-old desktop CPU and consumes only a fraction of the power is a breakthrough we have not seen for many years.</p>
+<p>I tested both scalar and SIMD performance, and the result is shown as follows:</p>
+<table>
+<thead>
+<tr>
+<th>CPU</th>
+<th>scalar</th>
+<th>SIMD</th>
+<th>SIMD speed up</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>9900k</td>
+<td>53 seconds</td>
+<td>19 seconds</td>
+<td>2.79x</td>
+</tr>
+<tr>
+<td>M1 Max Native</td>
+<td>35 seconds</td>
+<td>15 seconds</td>
+<td>2.33x</td>
+</tr>
+<tr>
+<td>M1 Max Rosetta</td>
+<td>48 seconds</td>
+<td>16 seconds</td>
+<td>3.x</td>
+</tr>
+</tbody>
+</table>
+<p>In scalar mode, M1 is 1.5 times faster than 9900k. In Rosetta, it&rsquo;s still a little bit faster. M1 is less impressive when using SIMD, but it is still 26% faster than 9900k. SIMD performance seems equal in native and Rosetta, so maybe there is some performance loss due to the sse2neon library? We could also use AVX2(8 floats per vector register) and maybe double the performance on 9900k.</p>
+<p>Non the less, considering the frequency of M1 is only 3GHerz, it&rsquo;s very impressive in terms of scalar, single-thread performance. It is also completely silent and cool when doing the benchmark. I have to say M1 Max MacBook Pro is the best laptop I have ever used. But native dev software on macOS always leaves a lot to be desired, when can I have complete Visual Studio on my MacBook?</p>
+
+    </div>
+    <footer class="content__footer"></footer>
+
+            </section>
+
+            <section class="page__aside">
+                <div class="aside__about"><ul>
+    <style>
+    li.side_tags {
+        list-style-type: none;
+        margin: 0;
+        padding: 0;
+      }
+    </style>
+    <li class="side_tags">Tags</li>
+    
+        
+            <li  class="side_tags"><a href="https://ianslayer.github.io/tags/simd/">simd</a></li>
+        
+    
+</ul></div>         
+                <div class="aside__about">
+
+<ul class="aside__social-links">
+    
+    <li>
+        <a href="https://github.com/ianslayer" rel="me" aria-label="GitHub" title="GitHub"><i class="fab fa-github" aria-hidden="true"></i></a>&nbsp;
+    </li>
+    
+    <li>
+        <a href="https://twitter.com/ianslayer" rel="me" aria-label="twitter" title="twitter"><i class="fab fa-twitter" aria-hidden="true"></i></a>&nbsp;
+    </li>
+    
+</ul>
+</div>
+                <div class="aside__content">
+    
+    
+        <p>
+            
+            2022-05-16
+        </p>
+    
+
+                </div>
+            </section>
+
+            <footer class="page__footer"><p class="copyright">© 2022 ian-ys</p>
+<p class="advertisement">Powered by <a href="https://gohugo.io/">hugo</a> and <a href="https://github.com/joeroe/risotto">risotto</a>.</p>
+</footer>
+
+        </div>
+    </body>
+
+</html>

@@ -6,6 +6,16 @@
     <description>Recent content in Tags on ian&#39;s corner</description>
     <generator>Hugo -- gohugo.io</generator>
     <language>en-us</language>
-    <copyright>© 2022 ian-ys</copyright><atom:link href="https://ianslayer.github.io/tags/index.xml" rel="self" type="application/rss+xml" />
+    <copyright>© 2022 ian-ys</copyright>
+    <lastBuildDate>Mon, 16 May 2022 15:00:00 +0800</lastBuildDate><atom:link href="https://ianslayer.github.io/tags/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>SIMD</title>
+      <link>https://ianslayer.github.io/tags/simd/</link>
+      <pubDate>Mon, 16 May 2022 15:00:00 +0800</pubDate>
+      
+      <guid>https://ianslayer.github.io/tags/simd/</guid>
+      <description></description>
+    </item>
+    
   </channel>
 </rss>
